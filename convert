@@ -1,0 +1,45 @@
+#!/bin/sh
+
+log=/dev/null
+
+streams=$(ffprobe -show_streams -print_format compact "$1" 2> $log | \
+  sed 's/$/|/')
+
+video=$(echo "$streams" | grep "|codec_type=video|")
+audio=$(echo "$streams" | grep "|codec_type=audio|")
+subtitles=$(echo "$streams" | grep "|codec_type=subtitle|")
+
+height=$(echo "$video" | tr '|' '\n' | sed -n 's/^coded_height=\(.*\)$/\1/p')
+
+if test $height -gt 720
+then
+  vfOption="-vf scale=-2:720"
+fi
+
+if test $(echo "$audio" | wc -l) -gt 1
+then
+  audioSource=$(echo "$audio" | grep -v "|tag:language=eng|")
+else
+  audioSource=$audio
+fi
+audioIndex=$(echo "$audioSource" | tr '|' '\n' | \
+  sed -n 's/^index=\(.*\)$/\1/p')
+
+subtitlesMplayerID=$(($(echo "$subtitles" | wc -l) - 1))
+subtitlesLast=$(echo "$subtitles" | tail -n1)
+subtitlesFfmpegID=$(echo "$subtitlesLast" | tr '|' '\n' | \
+  sed -n 's/^index=\(.*\)$/\1/p')
+count=$(ffmpeg -i "$1" -map 0:$subtitlesFfmpegID \
+  -vn -an -c:s copy -f ass - 2> $log | grep Default | wc -l)
+if test $count -gt 10
+then
+  default=Default.
+fi
+subtitlesOption="-sid $subtitlesMplayerID \
+--ass-force-style=${default}BackgroundColour=H77444444"
+
+output=$(echo -n $(basename "$1") | sed 's/\(.*\)\.\(.*\)/\1/g').mkv
+
+mplayer -nosound -benchmark -really-quiet $vfOption $subtitlesOption \
+    -vo yuv4mpeg:file=/dev/stdout "$1" | \
+  ffmpeg -y -i - -i "$1" -map 0 -map 1:$audioIndex -q:v 4 -c:a copy "$output"
